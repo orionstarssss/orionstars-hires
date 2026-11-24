@@ -22,8 +22,19 @@ app.get("/search/:type/:query.json", async (req, res) => {
   }
 });
 
-// Endpoint Catalog (Trending & Search fallback)
-app.get("/catalog/:type/:id/:extra?.json", async (req, res) => {
+// Endpoint Catalog Tanpa Extra (/catalog/track/top-tracks.json)
+app.get("/catalog/:type/:id.json", async (req, res) => {
+  try {
+    const { type, id } = req.params;
+    const metas = await getCatalog(type, id, "");
+    res.json({ metas });
+  } catch (err) {
+    res.json({ metas: [] });
+  }
+});
+
+// Endpoint Catalog Dengan Extra Search (/catalog/track/orion_search/search=query.json)
+app.get("/catalog/:type/:id/:extra.json", async (req, res) => {
   try {
     const { type, id, extra } = req.params;
     let searchQuery = "";
