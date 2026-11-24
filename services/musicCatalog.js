@@ -1,28 +1,27 @@
-const axios = require('axios');
-
-async function getMusicCatalog(searchQuery = '') {
+async function getCatalog(type, id, searchQuery) {
   try {
-    const endpoint = searchQuery
+    const url = searchQuery
       ? `https://api.deezer.com/search?q=${encodeURIComponent(searchQuery)}&limit=25`
       : `https://api.deezer.com/chart/0/tracks?limit=25`;
 
-    const { data } = await axios.get(endpoint);
+    const res = await fetch(url);
+    const data = await res.json();
     const tracks = data.data || [];
 
-    const metas = tracks.map((track) => ({
-      id: `dz_${track.id}`,
-      type: 'music',
-      name: `${track.title} - ${track.artist.name}`,
-      poster: track.album.cover_xl || track.album.cover_big,
-      posterShape: 'square',
-      description: `Album: ${track.album.title} • Artis: ${track.artist.name}`
+    return tracks.map((t) => ({
+      id: `dz_${t.id}`,
+      type: "track",
+      name: t.title,
+      artist: t.artist?.name || "Unknown Artist",
+      album: t.album?.title || "",
+      duration: t.duration || 0,
+      poster: t.album?.cover_xl || t.album?.cover_big || "",
+      posterShape: "square",
+      description: `${t.artist?.name || ""} • Album: ${t.album?.title || ""}`
     }));
-
-    return { metas };
-  } catch (error) {
-    console.error('Error catalog:', error.message);
-    return { metas: [] };
+  } catch (err) {
+    return [];
   }
 }
 
-module.exports = { getMusicCatalog };
+module.exports = { getCatalog };

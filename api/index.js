@@ -11,18 +11,19 @@ app.use(cors());
 app.get("/", (req, res) => res.redirect("/manifest.json"));
 app.get("/manifest.json", (req, res) => res.json(manifest));
 
-// Endpoint Search khusus BitChord (/search/track/query.json)
-app.get("/search/:type/:query.json", async (req, res) => {
+// Endpoint Search khusus BitChord (mendukung /search/track/query.json maupun /search/track/query)
+app.get("/search/:type/:query", async (req, res) => {
   try {
-    const query = decodeURIComponent(req.params.query);
-    const metas = await getCatalog("track", "orion_search", query);
-    res.json({ metas });
+    const rawQuery = req.params.query.replace(/\.json$/i, "");
+    const query = decodeURIComponent(rawQuery);
+    const items = await getCatalog("track", "orion_search", query);
+    res.json({ metas: items, results: items });
   } catch (err) {
-    res.json({ metas: [] });
+    res.json({ metas: [], results: [] });
   }
 });
 
-// Endpoint Catalog Tanpa Extra (/catalog/track/top-tracks.json)
+// Endpoint Catalog Tanpa Extra
 app.get("/catalog/:type/:id.json", async (req, res) => {
   try {
     const { type, id } = req.params;
@@ -33,7 +34,7 @@ app.get("/catalog/:type/:id.json", async (req, res) => {
   }
 });
 
-// Endpoint Catalog Dengan Extra Search (/catalog/track/orion_search/search=query.json)
+// Endpoint Catalog Dengan Extra Search
 app.get("/catalog/:type/:id/:extra.json", async (req, res) => {
   try {
     const { type, id, extra } = req.params;
