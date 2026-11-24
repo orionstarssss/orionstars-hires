@@ -1,87 +1,86 @@
-const axios = require('axios');
-const fs = require('fs');
-const path = require('path');
+const customTracks = require("../customTracks.json");
 
 const PIPED_INSTANCES = [
-  'https://pipedapi.kavin.rocks',
-  'https://pipedapi.tokhmi.xyz',
-  'https://pipedapi.moomoo.me'
+  "https://pipedapi.kavin.rocks",
+  "https://pipedapi.adminforge.de",
+  "https://api.piped.private.coffee",
+  "https://pipedapi.drgns.space"
 ];
 
-async function fetchFallbackAudio(query) {
+async function getStream(type, id) {
+  const streams = [];
+
+  // 1. Cek database custom FLAC/Hi-Res pribadi di customTracks.json
+  if (customTracks[id]) {
+    const custom = customTracks[id];
+    streams.push({
+      name: `💎 ${custom.quality || "FLAC 24-bit • 192kHz"}`,
+      title: `${custom.title || id}\n👤 @orionstars._\n📦 Ukuran: ${custom.size || "Lossless"}`,
+      url: custom.url
+    });
+  }
+
+  // 2. Ambil metadata lagu dari Deezer jika prefix dz_
+  let searchQuery = id.replace(/^(dz_|track_|pm_)/, "");
+  let deezerPreview = "";
+
+  if (id.startsWith("dz_")) {
+    const trackId = id.replace("dz_", "");
+    try {
+      const dzRes = await fetch(`https://api.deezer.com/track/${trackId}`);
+      const dzData = await dzRes.json();
+      if (dzData && dzData.title) {
+        searchQuery = `${dzData.title} ${dzData.artist?.name || ""}`.trim();
+        deezerPreview = dzData.preview || "";
+      }
+    } catch (e) {}
+  }
+
+  // 3. Ambil audio stream dari beberapa instance Piped secara paralel
   for (const instance of PIPED_INSTANCES) {
     try {
-      const searchUrl = `${instance}/search?q=${encodeURIComponent(query)}&filter=music_songs`;
-      const { data: searchData } = await axios.get(searchUrl, { timeout: 5000 });
-      const firstMatch = searchData.items?.[0];
-      if (!firstMatch) continue;
+      const searchRes = await fetch(
+        `${instance}/search?q=${encodeURIComponent(searchQuery)}&filter=music_songs`,
+        { signal: AbortSignal.timeout(3500) }
+      );
+      const searchJson = await searchRes.json();
+      const firstItem = searchJson?.items?.[0];
 
-      const videoId = firstMatch.url.split('v=')[1];
-      const { data: streamData } = await axios.get(`${instance}/streams/${videoId}`, { timeout: 5000 });
+      if (firstItem && firstItem.url) {
+        const videoId = firstItem.url.replace("/watch?v=", "");
+        const streamRes = await fetch(`${instance}/streams/${videoId}`, {
+          signal: AbortSignal.timeout(3500)
+        });
+        const streamJson = await streamRes.json();
 
-      const bestAudio = (streamData.audioStreams || [])
-        .sort((a, b) => b.bitrate - a.bitrate)[0];
+        const bestAudio = (streamJson.audioStreams || [])
+          .filter((a) => a.url && !a.videoOnly)
+          .sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0))[0];
 
-      if (bestAudio && bestAudio.url) {
-        return {
-          url: bestAudio.url,
-          bitrate: `${Math.round(bestAudio.bitrate / 1000)} kbps`,
-          codec: bestAudio.codec || 'OPUS/M4A'
-        };
+        if (bestAudio && bestAudio.url) {
+          streams.push({
+            name: `⚡ OrionStars Stream • ${Math.round((bestAudio.bitrate || 128000) / 1000)}kbps`,
+            title: `${firstItem.title}\n👤 @orionstars._ • ${bestAudio.codec || "Audio"}`,
+            url: bestAudio.url
+          });
+          break;
+        }
       }
-    } catch (err) {
+    } catch (e) {
       continue;
     }
   }
-  return null;
-}
 
-async function getMusicStream(id) {
-  const streams = [];
-
-  try {
-    const cleanId = id.replace('dz_', '');
-    const { data: track } = await axios.get(`https://api.deezer.com/track/${cleanId}`);
-    if (!track || track.error) return { streams: [] };
-
-    const trackLabel = `${track.title} - ${track.artist.name}`;
-
-    // 1. Cek Database FLAC / Hi-Res Pribadi
-    const dbPath = path.join(__dirname, '..', 'customTracks.json');
-    if (fs.existsSync(dbPath)) {
-      const customDb = JSON.parse(fs.readFileSync(dbPath, 'utf-8'));
-      if (customDb[id]) {
-        streams.push({
-          name: `💎 ${customDb[id].quality}`,
-          title: `${trackLabel}\n🎧 Lossless Stereo • @orionstars._\n📦 Ukuran: ${customDb[id].size || 'Master'}`,
-          url: customDb[id].url,
-          behaviorHints: { notWebReady: false }
-        });
-      }
-    }
-
-    // 2. Fallback Otomatis Full-Track
-    const fallback = await fetchFallbackAudio(trackLabel);
-    if (fallback) {
-      streams.push({
-        name: `⚡ Auto Stream • ${fallback.bitrate}`,
-        title: `${trackLabel}\n🔊 Codec: ${fallback.codec} • @orionstars._\n🌐 Auto-Resolved Stream`,
-        url: fallback.url,
-        behaviorHints: { notWebReady: false }
-      });
-    } else if (track.preview) {
-      streams.push({
-        name: '🎵 Preview 30s • MP3',
-        title: `${trackLabel}\n⚠️ Mode Preview (Fallback sibuk)`,
-        url: track.preview
-      });
-    }
-
-    return { streams };
-  } catch (error) {
-    console.error('Stream Error:', error.message);
-    return { streams: [] };
+  // 4. Fallback Direct MP3 jika semua server Piped sedang sibuk
+  if (deezerPreview) {
+    streams.push({
+      name: "🎵 Direct Audio • MP3",
+      title: `${searchQuery}\n👤 @orionstars._ (Fallback Direct)`,
+      url: deezerPreview
+    });
   }
+
+  return streams;
 }
 
-module.exports = { getMusicStream };
+module.exports = { getStream };

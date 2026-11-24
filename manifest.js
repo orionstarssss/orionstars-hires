@@ -1,12 +1,11 @@
 module.exports = {
   id: "org.orionstars.hires",
-  version: "1.1.0",
+  version: "1.2.0",
   name: "OrionStars Hi-Res Music",
-  description: "Custom Hi-Res & Lossless music streaming addon pipeline by @orionstars._",
-  contentType: "music",
+  description: "Custom Hi-Res & Lossless music streaming pipeline by @orionstars._",
   resources: ["search", "stream", "catalog", "meta"],
   types: ["track", "album", "artist", "playlist", "movie", "series"],
-  idPrefixes: ["dz_"],
+  allowDownloads: 1,
   catalogs: [
     {
       type: "track",
