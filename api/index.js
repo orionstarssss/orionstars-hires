@@ -1,44 +1,60 @@
-const express = require('express');
-const cors = require('cors');
-const manifest = require('../manifest');
-const { getMusicCatalog } = require('../services/musicCatalog');
-const { getMusicMeta } = require('../services/musicMeta');
-const { getMusicStream } = require('../services/musicStream');
+const express = require("express");
+const cors = require("cors");
+const manifest = require("../manifest");
+const { getCatalog } = require("../services/musicCatalog");
+const { getMeta } = require("../services/musicMeta");
+const { getStream } = require("../services/musicStream");
 
 const app = express();
 app.use(cors());
 
-app.get('/manifest.json', (req, res) => {
-  res.json(manifest);
+app.get("/", (req, res) => res.redirect("/manifest.json"));
+app.get("/manifest.json", (req, res) => res.json(manifest));
+
+// Endpoint Search khusus BitChord (/search/track/query.json)
+app.get("/search/:type/:query.json", async (req, res) => {
+  try {
+    const query = decodeURIComponent(req.params.query);
+    const metas = await getCatalog("track", "orion_search", query);
+    res.json({ metas });
+  } catch (err) {
+    res.json({ metas: [] });
+  }
 });
 
-app.get('/catalog/:type/:id.json', async (req, res) => {
-  const data = await getMusicCatalog();
-  res.json(data);
+// Endpoint Catalog (Trending & Search fallback)
+app.get("/catalog/:type/:id/:extra?.json", async (req, res) => {
+  try {
+    const { type, id, extra } = req.params;
+    let searchQuery = "";
+    if (extra && extra.startsWith("search=")) {
+      searchQuery = decodeURIComponent(extra.replace("search=", ""));
+    }
+    const metas = await getCatalog(type, id, searchQuery);
+    res.json({ metas });
+  } catch (err) {
+    res.json({ metas: [] });
+  }
 });
 
-app.get('/catalog/:type/:id/:extra.json', async (req, res) => {
-  const extraParams = new URLSearchParams(req.params.extra);
-  const searchQuery = extraParams.get('search') || '';
-  const data = await getMusicCatalog(searchQuery);
-  res.json(data);
+// Endpoint Meta
+app.get("/meta/:type/:id.json", async (req, res) => {
+  try {
+    const meta = await getMeta(req.params.type, req.params.id);
+    res.json({ meta });
+  } catch (err) {
+    res.json({ meta: null });
+  }
 });
 
-app.get('/meta/:type/:id.json', async (req, res) => {
-  const data = await getMusicMeta(req.params.id);
-  res.json(data);
+// Endpoint Stream
+app.get("/stream/:type/:id.json", async (req, res) => {
+  try {
+    const streams = await getStream(req.params.type, req.params.id);
+    res.json({ streams });
+  } catch (err) {
+    res.json({ streams: [] });
+  }
 });
-
-app.get('/stream/:type/:id.json', async (req, res) => {
-  const data = await getMusicStream(req.params.id);
-  res.json(data);
-});
-
-if (require.main === module) {
-  const PORT = process.env.PORT || 3000;
-  app.listen(PORT, () => {
-    console.log(`OrionStars Hi-Res aktif di http://localhost:${PORT}/manifest.json`);
-  });
-}
 
 module.exports = app;
