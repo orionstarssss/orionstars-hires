@@ -2,13 +2,11 @@ const express = require("express");
 const cors = require("cors");
 const manifest = require("../manifest");
 const { getCatalog } = require("../services/musicCatalog");
-const { getMeta } = require("../services/musicMeta");
 const { getStream } = require("../services/musicStream");
 
 const app = express();
 app.use(cors());
 
-// Log semua request masuk
 app.use((req, res, next) => {
   console.log(`[BITCHORD REQ] ${req.method} ${req.originalUrl}`);
   next();
@@ -17,51 +15,48 @@ app.use((req, res, next) => {
 app.get("/", (req, res) => res.redirect("/manifest.json"));
 app.get("/manifest.json", (req, res) => res.json(manifest));
 
-// Universal Search Handler untuk BitChord v1.10.1
+// Search Handler: Langsung menyertakan stream URL aktif di item hasil pencarian
 app.get(/^\/search/, async (req, res) => {
   try {
-    const pathPart = req.path.replace(/^\/search\/?(track|music|movie)?\/?/i, "").replace(/\.json$/i, "");
-    const query = req.query.q || req.query.query || req.query.search || decodeURIComponent(pathPart || "");
-    if (!query) return res.json({ results: [], tracks: [], items: [], metas: [] });
+    const query = req.query.q || req.query.query || "";
+    if (!query) return res.json({ results: [], tracks: [], items: [] });
 
     const items = await getCatalog("track", "orion_search", String(query));
+    if (items.length === 0) return res.json({ results: [], tracks: [], items: [] });
+
+    // Ambil stream audio langsung untuk lagu teratas agar BitChord langsung bisa memutarnya
+    const topStreams = await getStream("track", items[0].id, false);
+    const bestAudioUrl = topStreams[0]?.url || "";
+
+    const enrichedItems = items.map((item, idx) => ({
+      ...item,
+      url: idx === 0 ? bestAudioUrl : "",
+      streamUrl: idx === 0 ? bestAudioUrl : "",
+      audioUrl: idx === 0 ? bestAudioUrl : "",
+      codec: topStreams[0]?.name?.includes("FLAC") ? "FLAC" : "MP3",
+      bitrate: topStreams[0]?.name?.includes("FLAC") ? 1411 : 320
+    }));
+
+    // Kembalikan dalam format array & object agar terbaca oleh parser BitChord
     res.json({
-      results: items,
-      tracks: items,
-      items: items,
-      metas: items
+      results: enrichedItems,
+      tracks: enrichedItems,
+      items: enrichedItems
     });
   } catch (err) {
-    res.json({ results: [], tracks: [], items: [], metas: [] });
+    res.json({ results: [], tracks: [], items: [] });
   }
 });
 
-// Universal Stream Handler untuk BitChord v1.10.1
+// Cadangan jika sewaktu-waktu BitChord memanggil /stream
 app.get(/^\/stream/, async (req, res) => {
   try {
-    const debugMode = req.query.debug === "1";
-    const pathPart = req.path.replace(/^\/stream\/?(track|music|movie)?\/?/i, "").replace(/\.json$/i, "");
-    const queryTitle = req.query.title && req.query.artist
-      ? `${req.query.title} ${req.query.artist}`
-      : (req.query.q || req.query.title || req.query.id || decodeURIComponent(pathPart || ""));
-
-    const result = await getStream("track", String(queryTitle), debugMode);
-    if (debugMode) return res.json(result);
-    res.json({ streams: result });
+    const id = req.query.id || req.query.q || req.path.split("/").pop().replace(".json", "");
+    const streams = await getStream("track", String(id), false);
+    res.json({ streams });
   } catch (err) {
     res.json({ streams: [] });
   }
-});
-
-// Endpoint Catalog & Meta (cadangan)
-app.get("/catalog/:type/:id.json", async (req, res) => {
-  const metas = await getCatalog(req.params.type, req.params.id, "");
-  res.json({ metas });
-});
-
-app.get("/meta/:type/:id.json", async (req, res) => {
-  const meta = await getMeta(req.params.type, req.params.id);
-  res.json({ meta });
 });
 
 module.exports = app;
