@@ -8,32 +8,17 @@ async function getCatalog(type, id, searchQuery) {
     const data = await res.json();
     const tracks = data.data || [];
 
-    return tracks.map((t) => {
-      const artistName = t.artist?.name || "Unknown Artist";
-      const albumTitle = t.album?.title || "";
-      const coverUrl = t.album?.cover_xl || t.album?.cover_big || t.album?.cover_medium || "";
-
-      return {
-        id: `dz_${t.id}`,
-        trackId: `dz_${t.id}`,
-        type: "track",
-        title: t.title,
-        name: t.title,
-        artist: artistName,
-        artists: [artistName],
-        album: albumTitle,
-        duration: (t.duration || 0) * 1000,
-        durationSec: t.duration || 0,
-        cover: coverUrl,
-        artwork: coverUrl,
-        poster: coverUrl,
-        posterShape: "square",
-        isrc: t.isrc || "",
-        quality: "FLAC 24-bit • 192kHz",
-        lossless: true,
-        source: "OrionStars Hi-Res"
-      };
-    });
+    return tracks.map((t) => ({
+      id: `dz:${t.id}`,
+      title: t.title,
+      artist: t.artist?.name || "Unknown Artist",
+      album: t.album?.title || "",
+      duration: t.duration || 0,
+      artworkURL: t.album?.cover_xl || t.album?.cover_big || t.album?.cover_medium || "",
+      format: "flac",
+      audioQuality: "Hi-Res Lossless",
+      source: "OrionStars Hi-Res"
+    }));
   } catch (err) {
     return [];
   }

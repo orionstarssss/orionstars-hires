@@ -15,45 +15,35 @@ app.use((req, res, next) => {
 app.get("/", (req, res) => res.redirect("/manifest.json"));
 app.get("/manifest.json", (req, res) => res.json(manifest));
 
-// Search Handler: Langsung menyertakan stream URL aktif di item hasil pencarian
+// Search Handler persis skema Han Hi-Res / BitChord v1.10.1
 app.get(/^\/search/, async (req, res) => {
   try {
     const query = req.query.q || req.query.query || "";
-    if (!query) return res.json({ results: [], tracks: [], items: [] });
+    if (!query) return res.json({ tracks: [] });
 
-    const items = await getCatalog("track", "orion_search", String(query));
-    if (items.length === 0) return res.json({ results: [], tracks: [], items: [] });
-
-    // Ambil stream audio langsung untuk lagu teratas agar BitChord langsung bisa memutarnya
-    const topStreams = await getStream("track", items[0].id, false);
-    const bestAudioUrl = topStreams[0]?.url || "";
-
-    const enrichedItems = items.map((item, idx) => ({
-      ...item,
-      url: idx === 0 ? bestAudioUrl : "",
-      streamUrl: idx === 0 ? bestAudioUrl : "",
-      audioUrl: idx === 0 ? bestAudioUrl : "",
-      codec: topStreams[0]?.name?.includes("FLAC") ? "FLAC" : "MP3",
-      bitrate: topStreams[0]?.name?.includes("FLAC") ? 1411 : 320
-    }));
-
-    // Kembalikan dalam format array & object agar terbaca oleh parser BitChord
-    res.json({
-      results: enrichedItems,
-      tracks: enrichedItems,
-      items: enrichedItems
-    });
+    const tracks = await getCatalog("track", "orion_search", String(query));
+    res.json({ tracks });
   } catch (err) {
-    res.json({ results: [], tracks: [], items: [] });
+    res.json({ tracks: [] });
   }
 });
 
-// Cadangan jika sewaktu-waktu BitChord memanggil /stream
+// Stream Handler (menangkap semua format request /stream dari BitChord)
 app.get(/^\/stream/, async (req, res) => {
   try {
-    const id = req.query.id || req.query.q || req.path.split("/").pop().replace(".json", "");
-    const streams = await getStream("track", String(id), false);
-    res.json({ streams });
+    const rawId = req.query.id || req.query.trackId || req.path.split("/").pop().replace(".json", "");
+    const cleanId = decodeURIComponent(String(rawId)).replace(/^dz:/i, "dz_");
+    const streams = await getStream("track", cleanId, false);
+    const top = streams[0] || {};
+
+    // Kembalikan format stream BitChord sekaligus Stremio agar langsung terbaca
+    res.json({
+      url: top.url || "",
+      streamUrl: top.url || "",
+      format: "flac",
+      audioQuality: "Hi-Res Lossless",
+      streams
+    });
   } catch (err) {
     res.json({ streams: [] });
   }
