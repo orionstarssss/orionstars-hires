@@ -8,65 +8,57 @@ const { getStream } = require("../services/musicStream");
 const app = express();
 app.use(cors());
 
+// Log semua request masuk agar terlihat jelas di Runtime Logs Vercel
+app.use((req, res, next) => {
+  console.log(`[BITCHORD REQ] ${req.method} ${req.originalUrl}`);
+  next();
+});
+
 app.get("/", (req, res) => res.redirect("/manifest.json"));
 app.get("/manifest.json", (req, res) => res.json(manifest));
 
-// Endpoint Search khusus BitChord (mendukung /search/track/query.json maupun /search/track/query)
-app.get("/search/:type/:query", async (req, res) => {
+// Universal Search Handler (menangkap /search, /search/track/..., /search?q=..., dll)
+app.get(/^\/search/, async (req, res) => {
   try {
-    const rawQuery = req.params.query.replace(/\.json$/i, "");
-    const query = decodeURIComponent(rawQuery);
-    const items = await getCatalog("track", "orion_search", query);
+    const pathPart = req.path.replace(/^\/search\/?(track|music|movie)?\/?/i, "").replace(/\.json$/i, "");
+    const query = req.query.q || req.query.query || req.query.search || decodeURIComponent(pathPart || "");
+    if (!query) return res.json({ metas: [], results: [] });
+
+    const items = await getCatalog("track", "orion_search", String(query));
     res.json({ metas: items, results: items });
   } catch (err) {
     res.json({ metas: [], results: [] });
   }
 });
 
-// Endpoint Catalog Tanpa Extra
-app.get("/catalog/:type/:id.json", async (req, res) => {
+// Universal Stream Handler (menangkap /stream/track/id.json, /stream?id=..., /stream?title=...&artist=..., dll)
+app.get(/^\/stream/, async (req, res) => {
   try {
-    const { type, id } = req.params;
-    const metas = await getCatalog(type, id, "");
-    res.json({ metas });
-  } catch (err) {
-    res.json({ metas: [] });
-  }
-});
+    const debugMode = req.query.debug === "1";
+    const pathPart = req.path.replace(/^\/stream\/?(track|music|movie)?\/?/i, "").replace(/\.json$/i, "");
+    
+    // BitChord sering mengirim query ?title=...&artist=... atau ?q=... atau ID di path
+    const queryTitle = req.query.title && req.query.artist 
+      ? `${req.query.title} ${req.query.artist}` 
+      : (req.query.q || req.query.title || req.query.id || decodeURIComponent(pathPart || ""));
 
-// Endpoint Catalog Dengan Extra Search
-app.get("/catalog/:type/:id/:extra.json", async (req, res) => {
-  try {
-    const { type, id, extra } = req.params;
-    let searchQuery = "";
-    if (extra && extra.startsWith("search=")) {
-      searchQuery = decodeURIComponent(extra.replace("search=", ""));
-    }
-    const metas = await getCatalog(type, id, searchQuery);
-    res.json({ metas });
-  } catch (err) {
-    res.json({ metas: [] });
-  }
-});
-
-// Endpoint Meta
-app.get("/meta/:type/:id.json", async (req, res) => {
-  try {
-    const meta = await getMeta(req.params.type, req.params.id);
-    res.json({ meta });
-  } catch (err) {
-    res.json({ meta: null });
-  }
-});
-
-// Endpoint Stream
-app.get("/stream/:type/:id.json", async (req, res) => {
-  try {
-    const streams = await getStream(req.params.type, req.params.id);
-    res.json({ streams });
+    const result = await getStream("track", String(queryTitle), debugMode);
+    if (debugMode) return res.json(result);
+    res.json({ streams: result });
   } catch (err) {
     res.json({ streams: [] });
   }
+});
+
+// Endpoint Catalog & Meta (cadangan)
+app.get("/catalog/:type/:id.json", async (req, res) => {
+  const metas = await getCatalog(req.params.type, req.params.id, "");
+  res.json({ metas });
+});
+
+app.get("/meta/:type/:id.json", async (req, res) => {
+  const meta = await getMeta(req.params.type, req.params.id);
+  res.json({ meta });
 });
 
 module.exports = app;
