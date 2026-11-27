@@ -28,7 +28,7 @@ app.get(/^\/search/, async (req, res) => {
   }
 });
 
-// Stream Handler (menangkap semua format request /stream dari BitChord)
+// Stream Handler
 app.get(/^\/stream/, async (req, res) => {
   try {
     const rawId = req.query.id || req.query.trackId || req.path.split("/").pop().replace(".json", "");
@@ -36,7 +36,6 @@ app.get(/^\/stream/, async (req, res) => {
     const streams = await getStream("track", cleanId, false);
     const top = streams[0] || {};
 
-    // Kembalikan format stream BitChord sekaligus Stremio agar langsung terbaca
     res.json({
       url: top.url || "",
       streamUrl: top.url || "",
