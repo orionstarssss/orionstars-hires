@@ -1,14 +1,21 @@
 const customTracks = require("../customTracks.json");
 
-// Daftar gateway Qobuz lossless/hi-res community API (rotasi otomatis jika salah satu down)
-const QOBUZ_GATEWAYS = [
+// Gateway Lossless / Hi-Res aktif (Tidal/Monochrome & Qobuz proxy)
+const LOSSLESS_GATEWAYS = [
+  "https://tracks.monochrome.tf/api",
   "https://dab.yeet.su/api",
   "https://qobuz.squid.wtf/api"
 ];
 
+// Daftar instance Invidious & Piped aktif untuk full-length audio fallback
+const INVIDIOUS_INSTANCES = [
+  "https://inv.nadeko.net",
+  "https://invidious.nerdvpn.de",
+  "https://yewtu.be"
+];
+
 const PIPED_INSTANCES = [
   "https://pipedapi.kavin.rocks",
-  "https://pipedapi.adminforge.de",
   "https://api.piped.private.coffee"
 ];
 
@@ -17,7 +24,7 @@ function findCustomTrack(id, trackTitle, artistName) {
   const cleanTitle = (trackTitle || "").toLowerCase().trim();
   const cleanArtist = (artistName || "").toLowerCase().trim();
 
-  if (cleanTitle && cleanArtist && customTracks[`${cleanTitle} - ${cleanArtist}`]) {
+  if (cleanTitle && artistName && customTracks[`${cleanTitle} - ${cleanArtist}`]) {
     return customTracks[`${cleanTitle} - ${cleanArtist}`];
   }
   if (cleanTitle && customTracks[cleanTitle]) {
@@ -26,14 +33,13 @@ function findCustomTrack(id, trackTitle, artistName) {
   return null;
 }
 
-async function fetchQobuzStream(query, isrc) {
-  for (const baseUrl of QOBUZ_GATEWAYS) {
+async function fetchLosslessStream(query, isrc) {
+  for (const baseUrl of LOSSLESS_GATEWAYS) {
     try {
-      // 1. Cari track di Qobuz (prioritas pakai ISRC jika ada agar 100% akurat, fallback ke query judul)
       const searchParam = isrc || query;
       const searchRes = await fetch(
         `${baseUrl}/search?q=${encodeURIComponent(searchParam)}&type=track`,
-        { signal: AbortSignal.timeout(4000) }
+        { signal: AbortSignal.timeout(3500) }
       );
       if (!searchRes.ok) continue;
 
@@ -42,10 +48,9 @@ async function fetchQobuzStream(query, isrc) {
       const bestMatch = tracks[0];
       if (!bestMatch || !bestMatch.id) continue;
 
-      // 2. Ambil direct stream URL FLAC (quality 27 = Hi-Res 24-bit/192kHz, 6 = CD Lossless 16-bit/44.1kHz)
       const streamRes = await fetch(
         `${baseUrl}/stream?trackId=${bestMatch.id}&quality=27`,
-        { signal: AbortSignal.timeout(4500) }
+        { signal: AbortSignal.timeout(4000) }
       );
       if (!streamRes.ok) continue;
 
@@ -68,17 +73,88 @@ async function fetchQobuzStream(query, isrc) {
   return null;
 }
 
+async function fetchFullAudioFallback(searchQuery) {
+  // 1. Coba Invidious API (Full song audio stream)
+  for (const host of INVIDIOUS_INSTANCES) {
+    try {
+      const sRes = await fetch(
+        `${host}/api/v1/search?q=${encodeURIComponent(searchQuery + " audio")}&type=video`,
+        { signal: AbortSignal.timeout(3500) }
+      );
+      if (!sRes.ok) continue;
+      const results = await sRes.json();
+      const videoId = results?.[0]?.videoId;
+      if (!videoId) continue;
+
+      const vRes = await fetch(`${host}/api/v1/videos/${videoId}`, {
+        signal: AbortSignal.timeout(4000)
+      });
+      if (!vRes.ok) continue;
+      const vData = await vRes.json();
+
+      const audioFormats = (vData.adaptiveFormats || [])
+        .filter((f) => f.type && f.type.startsWith("audio/") && f.url)
+        .sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0));
+
+      if (audioFormats[0]?.url) {
+        return {
+          url: audioFormats[0].url,
+          bitrate: Math.round((audioFormats[0].bitrate || 160000) / 1000),
+          title: results[0].title || searchQuery
+        };
+      }
+    } catch (e) {
+      continue;
+    }
+  }
+
+  // 2. Cadangan Piped API (Full song audio stream)
+  for (const instance of PIPED_INSTANCES) {
+    try {
+      const searchRes = await fetch(
+        `${instance}/search?q=${encodeURIComponent(searchQuery)}&filter=music_songs`,
+        { signal: AbortSignal.timeout(3500) }
+      );
+      const searchJson = await searchRes.json();
+      const firstItem = searchJson?.items?.[0];
+
+      if (firstItem && firstItem.url) {
+        const videoId = firstItem.url.replace("/watch?v=", "");
+        const streamRes = await fetch(`${instance}/streams/${videoId}`, {
+          signal: AbortSignal.timeout(3500)
+        });
+        const streamJson = await streamRes.json();
+
+        const bestAudio = (streamJson.audioStreams || [])
+          .filter((a) => a.url && !a.videoOnly)
+          .sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0))[0];
+
+        if (bestAudio && bestAudio.url) {
+          return {
+            url: bestAudio.url,
+            bitrate: Math.round((bestAudio.bitrate || 128000) / 1000),
+            title: firstItem.title || searchQuery
+          };
+        }
+      }
+    } catch (e) {
+      continue;
+    }
+  }
+
+  return null;
+}
+
 async function getStream(type, id) {
   const streams = [];
   let trackTitle = "";
   let artistName = "";
   let isrc = "";
-  let searchQuery = id.replace(/^(dz_|track_|pm_|os_|qb_)/, "");
-  let deezerPreview = "";
+  let searchQuery = id.replace(/^(dz_|dz:|track_|pm_|os_|qb_)/, "");
 
-  // 1. Ambil metadata & kode ISRC dari Deezer jika prefix dz_
-  if (id.startsWith("dz_")) {
-    const trackId = id.replace("dz_", "");
+  // 1. Ambil metadata judul lengkap, artis, & ISRC dari Deezer (tanpa mengambil preview 30 detik)
+  if (id.startsWith("dz_") || id.startsWith("dz:")) {
+    const trackId = id.replace(/^dz[_:]/, "");
     try {
       const dzRes = await fetch(`https://api.deezer.com/track/${trackId}`);
       const dzData = await dzRes.json();
@@ -87,7 +163,6 @@ async function getStream(type, id) {
         artistName = dzData.artist?.name || "";
         isrc = dzData.isrc || "";
         searchQuery = `${trackTitle} ${artistName}`.trim();
-        deezerPreview = dzData.preview || "";
       }
     } catch (e) {}
   } else {
@@ -104,58 +179,26 @@ async function getStream(type, id) {
     });
   }
 
-  // 3. Prioritas Kedua: Otomatis Qobuz Lossless / Hi-Res Stream
-  const qobuz = await fetchQobuzStream(searchQuery, isrc);
-  if (qobuz && qobuz.url) {
+  // 3. Prioritas Kedua: Otomatis Lossless / Hi-Res Stream
+  const lossless = await fetchLosslessStream(searchQuery, isrc);
+  if (lossless && lossless.url) {
     streams.push({
-      name: `💠 Qobuz ${qobuz.quality}`,
-      title: `${qobuz.title || searchQuery}\n👤 @orionstars._ • Qobuz Lossless Pipeline`,
-      url: qobuz.url
+      name: `💠 ${lossless.quality}`,
+      title: `${lossless.title || searchQuery}\n👤 @orionstars._ • Lossless Pipeline`,
+      url: lossless.url
     });
   }
 
-  // 4. Fallback Ketiga: Piped Audio Stream
-  for (const instance of PIPED_INSTANCES) {
-    try {
-      const searchRes = await fetch(
-        `${instance}/search?q=${encodeURIComponent(searchQuery)}&filter=music_songs`,
-        { signal: AbortSignal.timeout(3000) }
-      );
-      const searchJson = await searchRes.json();
-      const firstItem = searchJson?.items?.[0];
-
-      if (firstItem && firstItem.url) {
-        const videoId = firstItem.url.replace("/watch?v=", "");
-        const streamRes = await fetch(`${instance}/streams/${videoId}`, {
-          signal: AbortSignal.timeout(3000)
-        });
-        const streamJson = await streamRes.json();
-
-        const bestAudio = (streamJson.audioStreams || [])
-          .filter((a) => a.url && !a.videoOnly)
-          .sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0))[0];
-
-        if (bestAudio && bestAudio.url) {
-          streams.push({
-            name: `⚡ OrionStars Stream • ${Math.round((bestAudio.bitrate || 128000) / 1000)}kbps`,
-            title: `${firstItem.title}\n👤 @orionstars._ • ${bestAudio.codec || "Audio"}`,
-            url: bestAudio.url
-          });
-          break;
-        }
-      }
-    } catch (e) {
-      continue;
+  // 4. Prioritas Ketiga: Full-Length Audio Stream (Invidious / Piped — full lagu, bukan 30 detik)
+  if (streams.length === 0) {
+    const fullAudio = await fetchFullAudioFallback(searchQuery);
+    if (fullAudio && fullAudio.url) {
+      streams.push({
+        name: `⚡ OrionStars Full Audio • ${fullAudio.bitrate}kbps`,
+        title: `${fullAudio.title}\n👤 @orionstars._ • Full Track`,
+        url: fullAudio.url
+      });
     }
-  }
-
-  // 5. Fallback Terakhir: Direct MP3 Deezer
-  if (deezerPreview) {
-    streams.push({
-      name: "🎵 Direct Audio • MP3",
-      title: `${searchQuery}\n👤 @orionstars._ (Fallback Direct)`,
-      url: deezerPreview
-    });
   }
 
   return streams;
